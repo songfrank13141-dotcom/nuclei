@@ -207,8 +207,10 @@ type reflectionFinding struct {
 // It uses the golang.org/x/net/html tokenizer (already in go.mod) for robust
 // HTML parsing — no regex for structural HTML analysis.
 //
-// If the marker appears multiple times, the first match is returned. Use
-// AnalyzeAllReflections for a full scan.
+// If the marker appears multiple times, all reflections are analyzed and the
+// most exploitable finding (best context as determined by contextPriority) is
+// returned, so callers do not rely on token order. Use AnalyzeAllReflections
+// to get all reflection contexts instead of just the highest-priority one.
 func AnalyzeReflectionContext(responseBody, marker string) XSSResult {
 	results := AnalyzeAllReflections(responseBody, marker)
 	if len(results) == 0 {
@@ -324,10 +326,6 @@ func scanHTML(body, markerLower, markerOriginal string) []reflectionFinding {
 				case "style":
 					inStyle = true
 				}
-			}
-
-			if tt == html.StartTagToken && tagName == "style" {
-				inStyle = true
 			}
 
 		case html.EndTagToken:
@@ -489,19 +487,47 @@ func classifyAttrValueContext(attrName, attrValue, tagName string) (XSSContext, 
 // detectAttrQuoteChar probes the raw HTML source around the marker to determine
 // which quote character wraps the attribute value. Returns '"', '\'' or 0 (unquoted).
 //
-// It searches backward from the reflection position (first occurrence of markerOriginal)
-// to find the nearest preceding attrName= and reads its delimiter byte.
-// This avoids false positives from other occurrences of the same attribute elsewhere
-// in the document.
+// It handles multiple marker occurrences by finding the occurrence that corresponds
+// to the specific attribute instance: for each marker occurrence, it checks if
+// attrName= appears before it, and uses the first occurrence where this is true.
+// This ensures correct quote detection when the same marker appears in multiple
+// attributes with different quote styles (e.g., <a href='/x'></a><a href="MARKER">).
 func detectAttrQuoteChar(rawBody, markerOriginal, attrName string) byte {
 	search := attrName + "="
 	searchLower := strings.ToLower(search)
 	rawLower := strings.ToLower(rawBody)
+	markerLower := strings.ToLower(markerOriginal)
 
-	// Find the position of the marker in the raw body first.
-	markerIdx := strings.Index(rawLower, strings.ToLower(markerOriginal))
+	// Iterate through all occurrences of the marker to find the one that
+	// corresponds to this specific attribute instance
+	markerIdx := -1
+	searchStart := 0
+	for {
+		idx := strings.Index(rawLower[searchStart:], markerLower)
+		if idx < 0 {
+			break
+		}
+		absMarkerIdx := searchStart + idx
+		
+		// Check if attrName= appears before this marker occurrence
+		segment := rawLower[:absMarkerIdx]
+		attrIdx := strings.LastIndex(segment, searchLower)
+		if attrIdx >= 0 {
+			// Found a valid attrName= before this marker occurrence
+			markerIdx = absMarkerIdx
+			break
+		}
+		
+		// Continue searching for the next marker occurrence
+		searchStart = absMarkerIdx + len(markerLower)
+	}
+	
+	// Fallback: if no valid occurrence found, use the last marker occurrence
 	if markerIdx < 0 {
-		return '"' // default assumption
+		markerIdx = strings.LastIndex(rawLower, markerLower)
+		if markerIdx < 0 {
+			return '"' // default assumption
+		}
 	}
 
 	// Search backward: find the last occurrence of attrName= before the marker.
@@ -561,19 +587,14 @@ func isJSONContext(text, markerLower string) bool {
 		return false
 	}
 	// Must see: colon preceded by closing quote (JSON key-value) or array start
-	// Pattern: `": "` or `': '` or `["`
+	// Pattern: `": "` or `["`
+	// JSON (RFC 8259) only uses double quotes for strings, so reject single quotes immediately
 	last := trimmed[len(trimmed)-1]
-	if last != '"' && last != '\'' && last != '[' {
-		return false
-	}
-	// JSON only uses double quotes. If the value is wrapped in single quotes,
-	// this is a JavaScript string or similar context — not valid JSON.
-	if last == '\'' {
+	if last != '"' && last != '[' {
 		return false
 	}
 	// Additional check: must see a colon (JSON key separator) in the context
 	// Avoids matching JS: var x = "MARKER"
-	// JSON (RFC 8259) only uses double quotes for strings
 	if last == '"' {
 		// Look for a colon before the quote that opened the value
 		// We search backwards for the opening quote and check there's a : before it
