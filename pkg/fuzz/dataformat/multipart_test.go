@@ -388,6 +388,14 @@ func TestMultiPartFormDecode_ConcurrentWithSeparateInstances(t *testing.T) {
 			kv, err := mpf.Decode(body)
 			assert.NoError(t, err)
 			assert.NotNil(t, kv)
+			fileValues, ok := kv.Get("file").([]interface{})
+			assert.True(t, ok, "expected file field to decode as []interface{}")
+			assert.Len(t, fileValues, 1)
+			assert.Equal(t, "file content", fileValues[0])
+
+			metadata, exists := mpf.GetFileMetadata("file")
+			assert.True(t, exists, "expected file metadata to be present")
+			assert.Equal(t, "test.txt", metadata.Filename)
 		}()
 	}
 	wg.Wait()

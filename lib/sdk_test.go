@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -167,10 +168,13 @@ response:
 	err = ne.LoadTargetsWithHttpData(tmpInput.Name(), "yaml")
 	require.NoError(t, err)
 
+	var callbackCount int32
 	err = ne.ExecuteCallbackWithCtx(context.Background(), func(event *output.ResultEvent) {
+		atomic.AddInt32(&callbackCount, 1)
 		t.Logf("Result: %s", event.TemplateID)
 	})
 	if err != nil {
 		t.Errorf("ExecuteCallbackWithCtx error: %v", err)
 	}
+	require.Greater(t, atomic.LoadInt32(&callbackCount), int32(0), "expected at least one result callback")
 }

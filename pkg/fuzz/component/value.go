@@ -165,7 +165,7 @@ func (v *Value) Encode() (string, error) {
 }
 
 func (v *Value) encode(data dataformat.KV) (string, error) {
-	if v.encoder != nil {
+	if v.encoder != nil && v.encoder.Name() == v.dataFormat {
 		return v.encoder.Encode(data)
 	}
 	return dataformat.Encode(data, v.dataFormat)
