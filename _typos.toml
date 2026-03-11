@@ -9,7 +9,6 @@ extend-exclude = [
     "**/*.sum",
     # Exclude test data files
     "**/testdata/**",
-    "**/testdata/**/*",
     # Exclude integration tests (contain test payloads)
     "integration_tests/**",
     "**/integration/**/*.yaml",
@@ -17,6 +16,8 @@ extend-exclude = [
     "**/*waf*.json",
     "**/*payload*.json",
     "**/*fuzz*.json",
+    # Exclude JSON schema (contains technical terms and patterns)
+    "nuclei-jsonschema.json",
     # Exclude JSON files under pkg/templates/ (template data with encoded strings)
     "pkg/templates/**/*.json",
     # Exclude WAF regexes JSON (contains base64 encoded strings)

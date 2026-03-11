@@ -201,9 +201,12 @@ func process(opts options) error {
 				gologger.Info().Label("format").Msg(logErrMsg(path, err, opts.debug, errFile))
 			} else {
 				if isFormatted {
-					_ = os.WriteFile(path, []byte(formattedTemplateData), 0644)
-					dataString = formattedTemplateData
-					gologger.Info().Label("format").Msgf("✅ formatted template: %s\n", path)
+					if err := os.WriteFile(path, []byte(formattedTemplateData), 0644); err != nil {
+						gologger.Info().Label("format").Msg(logErrMsg(path, err, opts.debug, errFile))
+					} else {
+						dataString = formattedTemplateData
+						gologger.Info().Label("format").Msgf("✅ formatted template: %s\n", path)
+					}
 				}
 			}
 		}
@@ -215,8 +218,11 @@ func process(opts options) error {
 				continue
 			} else {
 				if isEnhanced {
-					_ = os.WriteFile(path, []byte(enhancedTemplateData), 0644)
-					gologger.Info().Label("enhance").Msgf("✅ updated template: %s\n", path)
+					if err := os.WriteFile(path, []byte(enhancedTemplateData), 0644); err != nil {
+						gologger.Info().Label("enhance").Msg(logErrMsg(path, err, opts.debug, errFile))
+					} else {
+						gologger.Info().Label("enhance").Msgf("✅ updated template: %s\n", path)
+					}
 				}
 			}
 		}
