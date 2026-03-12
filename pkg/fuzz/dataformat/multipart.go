@@ -13,11 +13,11 @@ import (
 )
 
 type MultiPartForm struct {
-	boundary      string
 	filesMetadata map[string]FileMetadata
 	// mu protects filesMetadata from concurrent map access
 	mu sync.RWMutex
-	// boundaryMu protects boundary from concurrent access
+	// boundary is request-scoped, protected by boundaryMu
+	boundary   string
 	boundaryMu sync.Mutex
 }
 
@@ -72,11 +72,16 @@ func (m *MultiPartForm) IsType(data string) bool {
 // Encode encodes the data into MultiPartForm format
 func (m *MultiPartForm) Encode(data KV) (string, error) {
 	m.boundaryMu.Lock()
-	defer m.boundaryMu.Unlock()
+	boundary := m.boundary
+	m.boundaryMu.Unlock()
+
+	if boundary == "" {
+		return "", fmt.Errorf("boundary not set")
+	}
 
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
-	if err := w.SetBoundary(m.boundary); err != nil {
+	if err := w.SetBoundary(boundary); err != nil {
 		return "", err
 	}
 
@@ -85,7 +90,11 @@ func (m *MultiPartForm) Encode(data KV) (string, error) {
 		var fw io.Writer
 		var err error
 
-		if fileMetadata, ok := m.filesMetadata[key]; ok {
+		m.mu.RLock()
+		fileMetadata, ok := m.filesMetadata[key]
+		m.mu.RUnlock()
+
+		if ok {
 			if filesArray, isArray := value.([]any); isArray {
 				for _, file := range filesArray {
 					h := make(textproto.MIMEHeader)
@@ -151,7 +160,8 @@ func (m *MultiPartForm) Encode(data KV) (string, error) {
 	return b.String(), nil
 }
 
-// ParseBoundary parses the boundary from the content type
+// ParseBoundary parses the boundary from the content type and stores it
+// Deprecated: Use ParseAndDecode for atomic parse+decode to avoid race conditions
 func (m *MultiPartForm) ParseBoundary(contentType string) error {
 	m.boundaryMu.Lock()
 	defer m.boundaryMu.Unlock()
@@ -160,32 +170,119 @@ func (m *MultiPartForm) ParseBoundary(contentType string) error {
 	if err != nil {
 		return err
 	}
-	m.boundary = params["boundary"]
-	if m.boundary == "" {
+	boundary := params["boundary"]
+	if boundary == "" {
 		return fmt.Errorf("no boundary found in the content type")
 	}
 
 	// NOTE(dwisiswant0): boundary cannot exceed 70 characters according to
 	// RFC-2046.
-	if len(m.boundary) > 70 {
+	if len(boundary) > 70 {
 		return fmt.Errorf("boundary exceeds maximum length of 70 characters")
 	}
 
+	m.boundary = boundary
 	return nil
 }
 
-// Decode decodes the data from MultiPartForm format
+// Decode decodes the data from MultiPartForm format using the stored boundary
 func (m *MultiPartForm) Decode(data string) (KV, error) {
 	m.boundaryMu.Lock()
-	defer m.boundaryMu.Unlock()
+	boundary := m.boundary
+	m.boundaryMu.Unlock()
 
-	if m.boundary == "" {
-		return KV{}, fmt.Errorf("boundary not set, call ParseBoundary first")
+	if boundary == "" {
+		return KV{}, fmt.Errorf("boundary not set, call ParseBoundary first or use ParseAndDecode")
 	}
 
 	// Create a buffer from the string data
 	b := bytes.NewBufferString(data)
-	r := multipart.NewReader(b, m.boundary)
+	r := multipart.NewReader(b, boundary)
+
+	form, err := r.ReadForm(32 << 20) // 32MB is the max memory used to parse the form
+	if err != nil {
+		return KV{}, err
+	}
+	defer func() {
+		_ = form.RemoveAll()
+	}()
+
+	result := mapsutil.NewOrderedMap[string, any]()
+	for key, values := range form.Value {
+		if len(values) > 1 {
+			result.Set(key, values)
+		} else {
+			result.Set(key, values[0])
+		}
+	}
+
+	if m.filesMetadata == nil {
+		m.mu.Lock()
+		m.filesMetadata = make(map[string]FileMetadata)
+		m.mu.Unlock()
+	}
+
+	for key, files := range form.File {
+		fileContents := []interface{}{}
+		var fileMetadataList []FileMetadata
+
+		for _, fileHeader := range files {
+			file, err := fileHeader.Open()
+			if err != nil {
+				return KV{}, err
+			}
+
+			buffer := new(bytes.Buffer)
+			if _, err := buffer.ReadFrom(file); err != nil {
+				_ = file.Close()
+
+				return KV{}, err
+			}
+			_ = file.Close()
+
+			fileContents = append(fileContents, buffer.String())
+
+			fileMetadataList = append(fileMetadataList, FileMetadata{
+				ContentType: fileHeader.Header.Get("Content-Type"),
+				Filename:    fileHeader.Filename,
+			})
+		}
+
+		result.Set(key, fileContents)
+
+		// NOTE(dwisiswant0): store the first file's metadata instead of the
+		// last one
+		if len(fileMetadataList) > 0 {
+			m.mu.Lock()
+			m.filesMetadata[key] = fileMetadataList[0]
+			m.mu.Unlock()
+		}
+	}
+	return KVOrderedMap(&result), nil
+}
+
+// ParseAndDecode atomically parses the boundary from content type and decodes the data
+// This method avoids race conditions when using the singleton MultiPartForm instance
+func (m *MultiPartForm) ParseAndDecode(data string, contentType string) (KV, error) {
+	// Parse boundary
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return KV{}, err
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return KV{}, fmt.Errorf("no boundary found in the content type")
+	}
+
+	// NOTE(dwisiswant0): boundary cannot exceed 70 characters according to
+	// RFC-2046.
+	if len(boundary) > 70 {
+		return KV{}, fmt.Errorf("boundary exceeds maximum length of 70 characters")
+	}
+
+	// Create a buffer from the string data
+	b := bytes.NewBufferString(data)
+	r := multipart.NewReader(b, boundary)
 
 	form, err := r.ReadForm(32 << 20) // 32MB is the max memory used to parse the form
 	if err != nil {

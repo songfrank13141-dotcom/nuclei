@@ -78,13 +78,16 @@ func (b *Body) Parse(req *retryablehttp.Request) (bool, error) {
 // parseBody parses a body with a custom decoder
 func (b *Body) parseBody(decoderName string, req *retryablehttp.Request) (bool, error) {
 	decoder := dataformat.Get(decoderName)
+	var decoded dataformat.KV
+	var err error
+
 	if decoderName == dataformat.MultiPartFormDataFormat {
-		// set content type to extract boundary
-		if err := decoder.(*dataformat.MultiPartForm).ParseBoundary(req.Header.Get("Content-Type")); err != nil {
-			return false, errors.Wrap(err, "could not parse boundary")
-		}
+		// Use atomic ParseAndDecode to avoid race conditions with boundary
+		decoded, err = decoder.(*dataformat.MultiPartForm).ParseAndDecode(b.value.String(), req.Header.Get("Content-Type"))
+	} else {
+		decoded, err = decoder.Decode(b.value.String())
 	}
-	decoded, err := decoder.Decode(b.value.String())
+
 	if err != nil {
 		return false, errors.Wrap(err, "could not decode raw")
 	}

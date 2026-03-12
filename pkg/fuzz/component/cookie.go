@@ -45,7 +45,8 @@ func (c *Cookie) Parse(req *retryablehttp.Request) (bool, error) {
 
 	// Also read cookies from the Cookie header (set via -H flag)
 	// This ensures cookies specified via command line are preserved
-	if cookieHeader := req.Header.Get("Cookie"); cookieHeader != "" {
+	// Use req.Header["Cookie"] to handle all repeated Cookie headers
+	for _, cookieHeader := range req.Header["Cookie"] {
 		cookies := parseCookieHeader(cookieHeader)
 		for name, value := range cookies {
 			// Only add if not already present from CookieJar
