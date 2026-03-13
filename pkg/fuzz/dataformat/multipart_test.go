@@ -86,15 +86,16 @@ func TestMultiPartFormEncode(t *testing.T) {
 			}()
 
 			form := NewMultiPartForm()
-			// Set boundary via ParseBoundary for proper mutex handling
-			_ = form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW")
+			// Parse boundary and use request-scoped methods to avoid race conditions
+			boundary, err := form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW")
+			require.NoError(t, err)
 
 			kv := mapsutil.NewOrderedMap[string, any]()
 			for k, v := range tt.fields {
 				kv.Set(k, v)
 			}
 
-			encoded, err := form.Encode(KVOrderedMap(&kv))
+			encoded, err := form.EncodeWithBoundary(KVOrderedMap(&kv), boundary)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -103,8 +104,8 @@ func TestMultiPartFormEncode(t *testing.T) {
 
 			require.NoError(t, err)
 
-			// Decode the encoded multipart data
-			decoded, err := form.Decode(encoded)
+			// Decode the encoded multipart data using request-scoped boundary
+			decoded, err := form.DecodeWithBoundary(encoded, boundary)
 			require.NoError(t, err)
 
 			// Compare decoded values with expected values
@@ -148,17 +149,18 @@ func TestMultiPartFormRoundTrip(t *testing.T) {
 	}()
 
 	form := NewMultiPartForm()
-	// Set boundary via ParseBoundary for proper mutex handling
-	_ = form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW")
+	// Parse boundary and use request-scoped methods to avoid race conditions
+	boundary, err := form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW")
+	require.NoError(t, err)
 
 	original := mapsutil.NewOrderedMap[string, any]()
 	original.Set("username", "john")
 	original.Set("interests", []string{"sports", "music", "reading"})
 
-	encoded, err := form.Encode(KVOrderedMap(&original))
+	encoded, err := form.EncodeWithBoundary(KVOrderedMap(&original), boundary)
 	require.NoError(t, err)
 
-	decoded, err := form.Decode(encoded)
+	decoded, err := form.DecodeWithBoundary(encoded, boundary)
 	require.NoError(t, err)
 
 	assert.Equal(t, "john", decoded.Get("username"))
@@ -176,8 +178,9 @@ func TestMultiPartFormFileUpload(t *testing.T) {
 
 	// Test decoding of a manually crafted multipart form with files
 	form := NewMultiPartForm()
-	// Set boundary via ParseBoundary for proper mutex handling
-	_ = form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundaryFileUploadTest")
+	// Parse boundary and use request-scoped methods to avoid race conditions
+	boundary, err := form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundaryFileUploadTest")
+	require.NoError(t, err)
 
 	// Manually craft a multipart form with file uploads
 	multipartData := `------WebKitFormBoundaryFileUploadTest
@@ -218,8 +221,8 @@ Python
 ------WebKitFormBoundaryFileUploadTest--
 `
 
-	// Test decoding
-	decoded, err := form.Decode(multipartData)
+	// Test decoding using request-scoped boundary
+	decoded, err := form.DecodeWithBoundary(multipartData, boundary)
 	require.NoError(t, err)
 
 	// Verify regular fields
@@ -282,16 +285,15 @@ func TestMultiPartForm_BoundaryValidation(t *testing.T) {
 	form := NewMultiPartForm()
 
 	// Test valid boundary
-	err := form.ParseBoundary("multipart/form-data; boundary=testboundary")
+	boundary, err := form.ParseBoundary("multipart/form-data; boundary=testboundary")
 	assert.NoError(t, err)
-	// Access boundary through the internal state (it's set by ParseBoundary)
-	// We verify by attempting to decode which requires boundary to be set
-	_, decodeErr := form.Decode("test")
+	// Use the returned boundary with DecodeWithBoundary
+	_, decodeErr := form.DecodeWithBoundary("test", boundary)
 	// Should fail with multipart parsing error, not "boundary not set" error
 	assert.NotContains(t, decodeErr.Error(), "boundary not set")
 
 	// Test missing boundary
-	err = form.ParseBoundary("multipart/form-data")
+	_, err = form.ParseBoundary("multipart/form-data")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no boundary found")
 
@@ -301,7 +303,7 @@ func TestMultiPartForm_BoundaryValidation(t *testing.T) {
 		longBoundary = longBoundary[:len("multipart/form-data; boundary=")+i] + "a" + longBoundary[len("multipart/form-data; boundary=")+i+1:]
 	}
 
-	err = form.ParseBoundary(longBoundary)
+	_, err = form.ParseBoundary(longBoundary)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "boundary exceeds maximum length")
 }
@@ -317,8 +319,9 @@ func TestMultiPartForm_DecodeRequiresBoundary(t *testing.T) {
 
 func TestMultiPartForm_MultipleFilesMetadata(t *testing.T) {
 	form := NewMultiPartForm()
-	// Set boundary via ParseBoundary for proper mutex handling
-	_ = form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundaryMultiFileTest")
+	// Parse boundary and use request-scoped methods to avoid race conditions
+	boundary, err := form.ParseBoundary("multipart/form-data; boundary=----WebKitFormBoundaryMultiFileTest")
+	require.NoError(t, err)
 
 	// Test with multiple files having the same field name
 	multipartData := `------WebKitFormBoundaryMultiFileTest
@@ -334,7 +337,7 @@ content2
 ------WebKitFormBoundaryMultiFileTest--
 `
 
-	decoded, err := form.Decode(multipartData)
+	decoded, err := form.DecodeWithBoundary(multipartData, boundary)
 	require.NoError(t, err)
 
 	// Verify files are decoded correctly

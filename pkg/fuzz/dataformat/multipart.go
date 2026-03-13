@@ -69,7 +69,8 @@ func (m *MultiPartForm) IsType(data string) bool {
 	return false
 }
 
-// Encode encodes the data into MultiPartForm format
+// Encode encodes the data into MultiPartForm format using the stored boundary
+// Deprecated: Use EncodeWithBoundary to avoid race conditions
 func (m *MultiPartForm) Encode(data KV) (string, error) {
 	m.boundaryMu.Lock()
 	boundary := m.boundary
@@ -79,6 +80,12 @@ func (m *MultiPartForm) Encode(data KV) (string, error) {
 		return "", fmt.Errorf("boundary not set")
 	}
 
+	return m.EncodeWithBoundary(data, boundary)
+}
+
+// EncodeWithBoundary encodes the data into MultiPartForm format using the provided boundary
+// This method is safe for concurrent use as it doesn't rely on shared state
+func (m *MultiPartForm) EncodeWithBoundary(data KV, boundary string) (string, error) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 	if err := w.SetBoundary(boundary); err != nil {
@@ -160,32 +167,30 @@ func (m *MultiPartForm) Encode(data KV) (string, error) {
 	return b.String(), nil
 }
 
-// ParseBoundary parses the boundary from the content type and stores it
-// Deprecated: Use ParseAndDecode for atomic parse+decode to avoid race conditions
-func (m *MultiPartForm) ParseBoundary(contentType string) error {
-	m.boundaryMu.Lock()
-	defer m.boundaryMu.Unlock()
-
+// ParseBoundary parses the boundary from the content type and returns it
+// The returned boundary should be passed to DecodeWithBoundary or EncodeWithBoundary
+// to avoid race conditions with the singleton instance
+func (m *MultiPartForm) ParseBoundary(contentType string) (string, error) {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return err
+		return "", err
 	}
 	boundary := params["boundary"]
 	if boundary == "" {
-		return fmt.Errorf("no boundary found in the content type")
+		return "", fmt.Errorf("no boundary found in the content type")
 	}
 
 	// NOTE(dwisiswant0): boundary cannot exceed 70 characters according to
 	// RFC-2046.
 	if len(boundary) > 70 {
-		return fmt.Errorf("boundary exceeds maximum length of 70 characters")
+		return "", fmt.Errorf("boundary exceeds maximum length of 70 characters")
 	}
 
-	m.boundary = boundary
-	return nil
+	return boundary, nil
 }
 
 // Decode decodes the data from MultiPartForm format using the stored boundary
+// Deprecated: Use DecodeWithBoundary or ParseAndDecode to avoid race conditions
 func (m *MultiPartForm) Decode(data string) (KV, error) {
 	m.boundaryMu.Lock()
 	boundary := m.boundary
@@ -195,6 +200,12 @@ func (m *MultiPartForm) Decode(data string) (KV, error) {
 		return KV{}, fmt.Errorf("boundary not set, call ParseBoundary first or use ParseAndDecode")
 	}
 
+	return m.DecodeWithBoundary(data, boundary)
+}
+
+// DecodeWithBoundary decodes the data from MultiPartForm format using the provided boundary
+// This method is safe for concurrent use as it doesn't rely on shared state
+func (m *MultiPartForm) DecodeWithBoundary(data string, boundary string) (KV, error) {
 	// Create a buffer from the string data
 	b := bytes.NewBufferString(data)
 	r := multipart.NewReader(b, boundary)
