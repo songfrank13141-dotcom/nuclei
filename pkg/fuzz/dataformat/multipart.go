@@ -16,9 +16,6 @@ type MultiPartForm struct {
 	filesMetadata map[string]FileMetadata
 	// mu protects filesMetadata from concurrent map access
 	mu sync.RWMutex
-	// boundary is request-scoped, protected by boundaryMu
-	boundary   string
-	boundaryMu sync.Mutex
 }
 
 type FileMetadata struct {
@@ -69,18 +66,11 @@ func (m *MultiPartForm) IsType(data string) bool {
 	return false
 }
 
-// Encode encodes the data into MultiPartForm format using the stored boundary
-// Deprecated: Use EncodeWithBoundary to avoid race conditions
+// Encode encodes the data into MultiPartForm format
+// Deprecated: Use EncodeWithBoundary to avoid race conditions - the singleton instance
+// cannot store request-scoped boundary safely. This method always returns an error.
 func (m *MultiPartForm) Encode(data KV) (string, error) {
-	m.boundaryMu.Lock()
-	boundary := m.boundary
-	m.boundaryMu.Unlock()
-
-	if boundary == "" {
-		return "", fmt.Errorf("boundary not set")
-	}
-
-	return m.EncodeWithBoundary(data, boundary)
+	return "", fmt.Errorf("Encode() requires boundary - use EncodeWithBoundary() instead")
 }
 
 // EncodeWithBoundary encodes the data into MultiPartForm format using the provided boundary
@@ -189,18 +179,11 @@ func (m *MultiPartForm) ParseBoundary(contentType string) (string, error) {
 	return boundary, nil
 }
 
-// Decode decodes the data from MultiPartForm format using the stored boundary
-// Deprecated: Use DecodeWithBoundary or ParseAndDecode to avoid race conditions
+// Decode decodes the data from MultiPartForm format
+// Deprecated: Use DecodeWithBoundary or ParseAndDecode to avoid race conditions - the
+// singleton instance cannot store request-scoped boundary safely. This method always returns an error.
 func (m *MultiPartForm) Decode(data string) (KV, error) {
-	m.boundaryMu.Lock()
-	boundary := m.boundary
-	m.boundaryMu.Unlock()
-
-	if boundary == "" {
-		return KV{}, fmt.Errorf("boundary not set, call ParseBoundary first or use ParseAndDecode")
-	}
-
-	return m.DecodeWithBoundary(data, boundary)
+	return KV{}, fmt.Errorf("Decode() requires boundary - use DecodeWithBoundary() or ParseAndDecode() instead")
 }
 
 // DecodeWithBoundary decodes the data from MultiPartForm format using the provided boundary
@@ -227,11 +210,12 @@ func (m *MultiPartForm) DecodeWithBoundary(data string, boundary string) (KV, er
 		}
 	}
 
+	// Ensure filesMetadata is initialized
+	m.mu.Lock()
 	if m.filesMetadata == nil {
-		m.mu.Lock()
 		m.filesMetadata = make(map[string]FileMetadata)
-		m.mu.Unlock()
 	}
+	m.mu.Unlock()
 
 	for key, files := range form.File {
 		fileContents := []interface{}{}
@@ -312,11 +296,12 @@ func (m *MultiPartForm) ParseAndDecode(data string, contentType string) (KV, err
 		}
 	}
 
+	// Ensure filesMetadata is initialized
+	m.mu.Lock()
 	if m.filesMetadata == nil {
-		m.mu.Lock()
 		m.filesMetadata = make(map[string]FileMetadata)
-		m.mu.Unlock()
 	}
+	m.mu.Unlock()
 
 	for key, files := range form.File {
 		fileContents := []interface{}{}
