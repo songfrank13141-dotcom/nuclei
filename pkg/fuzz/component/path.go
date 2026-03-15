@@ -109,9 +109,17 @@ func (q *Path) Rebuild() (*retryablehttp.Request, error) {
 
 		// Check if we have a replacement for this segment
 		key := strconv.Itoa(segmentIndex)
-		if newValue, exists := q.value.parsed.Map.GetOrDefault(key, "").(string); exists && newValue != "" {
-			rebuiltSegments = append(rebuiltSegments, newValue)
+		val := q.value.parsed.Map.Get(key)
+		if val == nil {
+			// Key doesn't exist (segment was deleted via Delete()), drop the segment
+			segmentIndex++
+			continue
+		}
+		if strVal, ok := val.(string); ok {
+			// String value (including empty string) - preserve it
+			rebuiltSegments = append(rebuiltSegments, strVal)
 		} else {
+			// Non-string or invalid type - fall back to original segment
 			rebuiltSegments = append(rebuiltSegments, originalSegment)
 		}
 		segmentIndex++
