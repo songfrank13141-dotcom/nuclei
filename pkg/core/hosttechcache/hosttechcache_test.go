@@ -34,8 +34,14 @@ func TestHostTechCache_ApacheExactMatch(t *testing.T) {
 	c := NewHostTechCache()
 	c.RecordServerHeader("http://example.com", "Apache")
 
-	mustSkip(t, c, "http://example.com", []string{"nginx"}, "non-apache tag should be skipped")
+	// On Apache host, templates with incompatible tech tags (nginx, iis, tomcat) should be skipped
+	mustSkip(t, c, "http://example.com", []string{"nginx"}, "nginx-tagged template should be skipped on Apache")
+	mustSkip(t, c, "http://example.com", []string{"iis"}, "iis-tagged template should be skipped on Apache")
+	mustSkip(t, c, "http://example.com", []string{"tomcat"}, "tomcat-tagged template should be skipped on Apache")
+	// Templates with apache tag or no tech-specific tags should NOT be skipped
 	mustNotSkip(t, c, "http://example.com", []string{"apache"}, "apache tag must not be skipped")
+	mustNotSkip(t, c, "http://example.com", []string{"xss"}, "tech-agnostic template (xss) must not be skipped")
+	mustNotSkip(t, c, "http://example.com", []string{"cve", "sqli"}, "tech-agnostic template must not be skipped")
 }
 
 func TestHostTechCache_ApacheVersionString(t *testing.T) {
@@ -43,8 +49,12 @@ func TestHostTechCache_ApacheVersionString(t *testing.T) {
 	c := NewHostTechCache()
 	c.RecordServerHeader("https://target.io", "Apache/2.4.51 (Unix) OpenSSL/1.1.1l")
 
-	mustSkip(t, c, "https://target.io", []string{"iis", "xss"}, "non-apache template should be skipped")
+	// Incompatible tech templates should be skipped
+	mustSkip(t, c, "https://target.io", []string{"iis"}, "iis template should be skipped on Apache")
+	mustSkip(t, c, "https://target.io", []string{"nginx"}, "nginx template should be skipped on Apache")
+	// Compatible or tech-agnostic templates should NOT be skipped
 	mustNotSkip(t, c, "https://target.io", []string{"apache", "cve"}, "template tagged apache+cve must run")
+	mustNotSkip(t, c, "https://target.io", []string{"xss"}, "tech-agnostic xss template must run")
 }
 
 func TestHostTechCache_ApacheCaseInsensitive(t *testing.T) {
@@ -58,8 +68,9 @@ func TestHostTechCache_ApacheCaseInsensitive(t *testing.T) {
 		c := NewHostTechCache()
 		c.RecordServerHeader("http://host.test", hdr)
 
-		mustSkip(t, c, "http://host.test", []string{"nginx"}, fmt.Sprintf("header %q: non-apache should skip", hdr))
+		mustSkip(t, c, "http://host.test", []string{"nginx"}, fmt.Sprintf("header %q: nginx should skip", hdr))
 		mustNotSkip(t, c, "http://host.test", []string{"apache"}, fmt.Sprintf("header %q: apache tag must not skip", hdr))
+		mustNotSkip(t, c, "http://host.test", []string{"xss"}, fmt.Sprintf("header %q: tech-agnostic must not skip", hdr))
 	}
 }
 
@@ -92,13 +103,12 @@ func TestHostTechCache_UnrecognisedServerHeader(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHostTechCache_TemplateWithNoTags(t *testing.T) {
-	// A template with zero tags should be skipped once Apache is detected —
-	// it carries no evidence of Apache relevance.
+	// A template with zero tags is tech-agnostic and should NOT be skipped.
 	c := NewHostTechCache()
 	c.RecordServerHeader("http://example.com", "Apache/2.2")
 
-	mustSkip(t, c, "http://example.com", []string{}, "tagless template should be skipped on Apache host")
-	mustSkip(t, c, "http://example.com", nil, "nil-tag template should be skipped on Apache host")
+	mustNotSkip(t, c, "http://example.com", []string{}, "tagless template should NOT be skipped on Apache host")
+	mustNotSkip(t, c, "http://example.com", nil, "nil-tag template should NOT be skipped on Apache host")
 }
 
 func TestHostTechCache_MultiTagTemplateOneMatches(t *testing.T) {
@@ -110,13 +120,13 @@ func TestHostTechCache_MultiTagTemplateOneMatches(t *testing.T) {
 		"template with apache among multiple tags must run")
 }
 
-func TestHostTechCache_MultiTagTemplateNoneMatch(t *testing.T) {
-	// Template tagged ["rce", "nginx", "cve-2023"] — should be skipped.
+func TestHostTechCache_MultiTagTemplateHasIncompatible(t *testing.T) {
+	// Template tagged ["rce", "nginx", "cve-2023"] — should be skipped on Apache host.
 	c := NewHostTechCache()
 	c.RecordServerHeader("http://example.com", "Apache/2.4")
 
 	mustSkip(t, c, "http://example.com", []string{"rce", "nginx", "cve-2023"},
-		"template without apache tag must be skipped on Apache host")
+		"template with incompatible nginx tag must be skipped on Apache host")
 }
 
 func TestHostTechCache_TagComparisonIsCaseInsensitive(t *testing.T) {
@@ -124,9 +134,9 @@ func TestHostTechCache_TagComparisonIsCaseInsensitive(t *testing.T) {
 	c.RecordServerHeader("http://example.com", "Apache/2.4")
 
 	// Template tags written in various cases should all match.
-	for _, tag := range []string{"Apache", "APACHE", "aPaChE"} {
-		mustNotSkip(t, c, "http://example.com", []string{tag},
-			fmt.Sprintf("tag %q must match the apache hint case-insensitively", tag))
+	for _, tag := range []string{"nginx", "NGINX", "Nginx"} {
+		mustSkip(t, c, "http://example.com", []string{tag},
+			fmt.Sprintf("tag %q must match the nginx incompatibility case-insensitively", tag))
 	}
 }
 
@@ -139,7 +149,7 @@ func TestHostTechCache_PerHostIsolation(t *testing.T) {
 	c.RecordServerHeader("http://apache-host.com", "Apache/2.4")
 	// nginx-host.com deliberately has no hint recorded.
 
-	// apache-host: non-apache template skipped
+	// apache-host: incompatible tech template skipped
 	mustSkip(t, c, "http://apache-host.com", []string{"nginx"}, "apache-host: nginx template should skip")
 
 	// nginx-host: same template must NOT be skipped (no hint)
@@ -184,8 +194,9 @@ func TestHostTechCache_ConcurrentWrites(t *testing.T) {
 	// Every host should now have the apache hint.
 	for i := 0; i < goroutines; i++ {
 		host := fmt.Sprintf("http://host-%d.example.com", i)
-		mustSkip(t, c, host, []string{"nginx"}, fmt.Sprintf("host %s: non-apache should skip after concurrent write", host))
+		mustSkip(t, c, host, []string{"nginx"}, fmt.Sprintf("host %s: nginx should skip after concurrent write", host))
 		mustNotSkip(t, c, host, []string{"apache"}, fmt.Sprintf("host %s: apache should not skip after concurrent write", host))
+		mustNotSkip(t, c, host, []string{"xss"}, fmt.Sprintf("host %s: tech-agnostic should not skip after concurrent write", host))
 	}
 }
 
@@ -235,6 +246,49 @@ func TestNewHostTechCache_InitialisedEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. Multiple tech stack support
+// ---------------------------------------------------------------------------
+
+func TestHostTechCache_NginxDetection(t *testing.T) {
+	c := NewHostTechCache()
+	c.RecordServerHeader("http://example.com", "nginx/1.18.0")
+
+	// On nginx host, incompatible tech templates should be skipped
+	mustSkip(t, c, "http://example.com", []string{"apache"}, "apache template should skip on nginx")
+	mustSkip(t, c, "http://example.com", []string{"iis"}, "iis template should skip on nginx")
+	mustSkip(t, c, "http://example.com", []string{"tomcat"}, "tomcat template should skip on nginx")
+	// nginx and tech-agnostic templates should NOT be skipped
+	mustNotSkip(t, c, "http://example.com", []string{"nginx"}, "nginx template must not skip")
+	mustNotSkip(t, c, "http://example.com", []string{"xss"}, "tech-agnostic template must not skip")
+}
+
+func TestHostTechCache_IISDetection(t *testing.T) {
+	c := NewHostTechCache()
+	c.RecordServerHeader("http://example.com", "Microsoft-IIS/10.0")
+
+	// On IIS host, incompatible tech templates should be skipped
+	mustSkip(t, c, "http://example.com", []string{"apache"}, "apache template should skip on IIS")
+	mustSkip(t, c, "http://example.com", []string{"nginx"}, "nginx template should skip on IIS")
+	mustSkip(t, c, "http://example.com", []string{"tomcat"}, "tomcat template should skip on IIS")
+	// IIS and tech-agnostic templates should NOT be skipped
+	mustNotSkip(t, c, "http://example.com", []string{"iis"}, "iis template must not skip")
+	mustNotSkip(t, c, "http://example.com", []string{"xss"}, "tech-agnostic template must not skip")
+}
+
+func TestHostTechCache_TomcatDetection(t *testing.T) {
+	c := NewHostTechCache()
+	c.RecordServerHeader("http://example.com", "Apache-Coyote/1.1 (Tomcat)")
+
+	// On Tomcat host, incompatible tech templates should be skipped
+	mustSkip(t, c, "http://example.com", []string{"apache"}, "apache template should skip on Tomcat")
+	mustSkip(t, c, "http://example.com", []string{"nginx"}, "nginx template should skip on Tomcat")
+	mustSkip(t, c, "http://example.com", []string{"iis"}, "iis template should skip on Tomcat")
+	// Tomcat and tech-agnostic templates should NOT be skipped
+	mustNotSkip(t, c, "http://example.com", []string{"tomcat"}, "tomcat template must not skip")
+	mustNotSkip(t, c, "http://example.com", []string{"xss"}, "tech-agnostic template must not skip")
+}
+
+// ---------------------------------------------------------------------------
 // 7. Edge / boundary cases
 // ---------------------------------------------------------------------------
 
@@ -253,9 +307,11 @@ func TestHostTechCache_ServerHeaderContainsApacheAsSubstring(t *testing.T) {
 	c.RecordServerHeader("http://sub.host", "NotApache/1.0")
 
 	mustSkip(t, c, "http://sub.host", []string{"nginx"},
-		"'NotApache' contains 'apache' substring — current behaviour skips non-apache templates")
+		"'NotApache' contains 'apache' substring — nginx template should skip")
 	mustNotSkip(t, c, "http://sub.host", []string{"apache"},
 		"'NotApache' contains 'apache' substring — apache-tagged template must still run")
+	mustNotSkip(t, c, "http://sub.host", []string{"xss"},
+		"'NotApache' contains 'apache' substring — tech-agnostic must still run")
 }
 
 func TestHostTechCache_MultipleHostsIndependent(t *testing.T) {
@@ -263,7 +319,7 @@ func TestHostTechCache_MultipleHostsIndependent(t *testing.T) {
 
 	hosts := map[string]string{
 		"http://alpha.test":   "Apache/2.4",
-		"http://beta.test":    "nginx/1.18",     // unrecognised → no hint
+		"http://beta.test":    "nginx/1.18",     // recognized → nginx hint
 		"http://gamma.test":   "",               // empty → no hint
 		"http://delta.test":   "Apache/1.3.42",
 	}
@@ -275,12 +331,23 @@ func TestHostTechCache_MultipleHostsIndependent(t *testing.T) {
 	// Alpha and delta → apache hints recorded.
 	for _, host := range []string{"http://alpha.test", "http://delta.test"} {
 		mustSkip(t, c, host, []string{"nginx"}, host+": nginx should skip (apache host)")
+		mustSkip(t, c, host, []string{"iis"}, host+": iis should skip (apache host)")
 		mustNotSkip(t, c, host, []string{"apache"}, host+": apache should not skip")
+		mustNotSkip(t, c, host, []string{"xss"}, host+": tech-agnostic should not skip")
 	}
 
-	// Beta and gamma → no hints; nothing skipped.
-	for _, host := range []string{"http://beta.test", "http://gamma.test"} {
+	// Beta → nginx hint recorded.
+	for _, host := range []string{"http://beta.test"} {
+		mustSkip(t, c, host, []string{"apache"}, host+": apache should skip (nginx host)")
+		mustSkip(t, c, host, []string{"iis"}, host+": iis should skip (nginx host)")
+		mustNotSkip(t, c, host, []string{"nginx"}, host+": nginx should not skip")
+		mustNotSkip(t, c, host, []string{"xss"}, host+": tech-agnostic should not skip")
+	}
+
+	// Gamma → no hints; nothing skipped.
+	for _, host := range []string{"http://gamma.test"} {
 		mustNotSkip(t, c, host, []string{"nginx"}, host+": nginx must not skip (no hint)")
 		mustNotSkip(t, c, host, []string{"apache"}, host+": apache must not skip (no hint)")
+		mustNotSkip(t, c, host, []string{"xss"}, host+": tech-agnostic must not skip (no hint)")
 	}
 }

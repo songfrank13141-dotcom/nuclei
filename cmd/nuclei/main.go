@@ -306,6 +306,7 @@ on extensive configurability, massive extensibility and ease of use.`)
 		flagSet.VarP(&options.Protocols, "type", "pt", fmt.Sprintf("templates to run based on protocol type. Possible values: %s", templateTypes.GetSupportedProtocolTypes())),
 		flagSet.VarP(&options.ExcludeProtocols, "exclude-type", "ept", fmt.Sprintf("templates to exclude based on protocol type. Possible values: %s", templateTypes.GetSupportedProtocolTypes())),
 		flagSet.StringSliceVarP(&options.IncludeConditions, "template-condition", "tc", nil, "templates to run based on expression condition", goflags.StringSliceOptions),
+		flagSet.BoolVarP(&options.DisableTechStackFiltering, "disable-tech-filter", "dtf", false, "disable automatic template filtering based on Server response header tech detection"),
 	)
 
 	flagSet.CreateGroup("output", "Output",
@@ -435,7 +436,6 @@ on extensive configurability, massive extensibility and ease of use.`)
 	)
 
 	flagSet.CreateGroup("headless", "Headless",
-		flagSet.BoolVarP(&options.DisableTechStackFiltering, "disable-tech-filter", "dtf", false, "disable automatic template filtering based on Server response header tech detection"),
 		flagSet.BoolVar(&options.Headless, "headless", false, "enable templates that require headless browser support (root user on Linux will disable sandbox)"),
 		flagSet.IntVar(&options.PageTimeout, "page-timeout", 20, "seconds to wait for each page in headless mode"),
 		flagSet.BoolVarP(&options.ShowBrowser, "show-browser", "sb", false, "show the browser on the screen when running templates with headless mode"),
